@@ -14,25 +14,36 @@ description: Agent Prompt 模板和 Agent Team 协调工具
 
 任务：
 1. 读取作业数据 /tmp/pku_assignments.json
-2. 筛选 "{course}" 的作业
-3. 创建目录结构：
+2. 读取公告数据 /tmp/pku_announcements.json 和课程内容数据 /tmp/pku_course_contents.json
+3. 分别筛选 "{course}" 的作业、公告和课程内容
+4. 创建目录结构：
    {course}/
    ├── 作业/
    ├── 通知/
    ├── 资料/
    └── 通知摘要.md
 
-4. 下载作业附件（如有）：
+5. 下载作业附件（如有）：
    pku3b a download <ID> -d {course}/作业/
 
-5. 生成 "通知摘要.md"：
+6. 下载 `kind="File"` 或带附件的课程内容；必须使用 `cc ls` 返回的完整复合 ID：
+   pku3b cc down <COURSE_ID:CONTENT_ID> -o {course}/资料/ --course-title "{course}"
+
+7. 保存公告详情：
+   pku3b ann show <ID>
+
+8. 如果 `cc` 请求手机令牌 OTP，在 PTY/交互终端让用户直接输入；不要把 OTP 写入命令、聊天、日志或文件。用户未完成 OTP 时记录“课程内容待认证”，继续整理已取得的作业和公告。
+
+9. 生成 "通知摘要.md"：
    - 课程统计（总/待交/已完成/逾期）
    - 待完成作业（🔴🟡🟢 紧急度）
    - 逾期作业列表
    - 已完成列表
-   - 下载文件列表
+   - 公告详情文件
+   - 课程内容与下载文件列表
+   - 待认证或失败项
 
-返回：作业数量、待交数量、下载数量、文件路径
+返回：作业数量、公告数量、课程内容数量、下载数量、待认证/失败数量、文件路径
 ```
 
 ## Coordinator Agent

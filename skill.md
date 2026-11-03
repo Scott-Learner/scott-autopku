@@ -53,9 +53,24 @@ description: AutoPku - 自动获取PKU课程通知、完成作业、撰写笔记
 
 在 AutoPku 桌面端中，这个 skill 应被视为已预加载。用户只输入“同步通知”“看看有什么作业”“课程/选课/DDL”等短请求时，不要先凭记忆或旧摘要回答；第一步必须先运行只读 `pku3b` 命令获取当前教学网数据。如果本轮当前终端里没有实际调用这些 `pku3b` 命令，就不能声称完成同步，必须先调用或报告具体失败命令和原因。
 
+### 内容生成入口 Gate（强制）
+
+在引用任何知识处理或内容生成类 task skill 之前，先检查：**用户本轮输入是否明确要求执行该项具体任务？**
+
+| Task skill | 允许引用的条件 |
+|------------|----------------|
+| `sub-skills/tasks/do-homework.md` | 用户明确要求完成或解答某项作业 |
+| `sub-skills/tasks/write-notes.md` | 用户明确要求撰写或生成课程笔记 |
+| `sub-skills/tasks/write-paper.md` | 用户明确要求撰写或生成课程论文 |
+| `sub-skills/tasks/make-slides.md` | 用户明确要求制作或生成幻灯片、PPT |
+
+如果条件不成立，**不得读取、引用、加载或通过 Agent 调用上述 task skills，也不得开始其任何准备阶段**。同步结果中出现未完成作业、课件、论文要求或汇报要求，只是状态信息，不构成内容生成授权；“你自己看着办”“都整理一下”“把能处理的都处理了”等笼统授权也不构成对具体生成任务的明确请求。
+
+对于“同步通知”“看看有什么作业”“课程/选课/DDL”等只读请求，只能路由到 `sub-skills/tasks/sync-notices.md`。如果用户意图不明确，先询问用户希望执行哪一项具体生成任务并停止，不得预先加载生成类 task skill。用户给出明确请求后，只路由到其明确指定的 task skill，并继续遵守该 skill 内部的选择、确认和提交 gate。
+
 | 用户意图示例 | 执行的任务 |
 |-------------|-----------|
-| "同步课程通知" / "看看有什么作业" | 同步所有课程通知和作业 |
+| "同步课程通知" / "看看有什么作业" | 同步当前课程的课件、通知和作业 |
 | "完成量子力学的第五次作业" | 完成指定课程作业（解析→解答→渲染→询问→提交） |
 | "给逻辑导论写笔记" | 从课件提取数学核心内容撰写笔记 |
 | "写马原课程论文" / "生成论文" | 生成课程论文（大纲→正文→渲染→询问） |
@@ -83,7 +98,7 @@ else:
 
 ### 2. 任务路由
 
-根据用户意图，引用对应的 task skill：
+根据用户意图，先通过“内容生成入口 Gate”，再引用符合条件的 task skill：
 
 ```
 用户: "同步课程通知"
@@ -153,20 +168,18 @@ for config in agent_configs:
 # 检查是否已安装，并固定本轮实际路径
 PKU3B="$(command -v pku3b || true)"
 test -n "$PKU3B" || echo "NOT_FOUND"
-
-# 未安装时执行（macOS Apple Silicon 示例）
-mkdir -p "$HOME/.local/bin"
-cd /tmp
-curl -LO "https://github.com/sshwy/pku3b/releases/download/0.11.0/pku3b-0.11.0-aarch64-apple-darwin.tar.gz"
-tar -xzf pku3b-0.11.0-aarch64-apple-darwin.tar.gz
-chmod +x pku3b-0.11.0-aarch64-apple-darwin/pku3b
-install -m 755 pku3b-0.11.0-aarch64-apple-darwin/pku3b "$HOME/.local/bin/pku3b"
-pku3b --version
+test -z "$PKU3B" || "$PKU3B" --version
 ```
 
-**重要**: 
+**版本要求**：
+- 当前验证版本：`pku3b 0.16.1`；最低使用 `0.16.1`
+- 执行时先检查 [sshwy/pku3b releases](https://github.com/sshwy/pku3b/releases) 的最新稳定版，不要继续安装文档中曾使用的 `0.11.0`
+- macOS 优先使用 `brew install sshwy/tools/pku3b`；已安装旧版时使用 Homebrew 升级
+- 具体安装、升级和直接下载方式见 `sub-skills/tools/pku3b-setup.md`
+
+**重要**:
 - 正确仓库: `sshwy/pku3b` (原 `yang-er/pku3b` 已失效)
-- 推荐版本: v0.11.0+ (支持公告 `ann` 和课表 `ct` 功能)
+- `0.12.1` 修复了 macOS Blackboard TLS；`0.14.0` 新增课程内容 `cc`；`0.16.1` 修复选课登录重定向
 
 ### 登录
 
@@ -175,16 +188,16 @@ pku3b --version
 **步骤**：
 
 ```bash
-# 1. 检查是否已登录
-pku3b a ls 2>&1 || echo "NOT_LOGGED_IN"
+# 1. 检查 Blackboard 登录是否可用
+pku3b a ls
 ```
 
-如果已登录（正常返回作业列表），跳过步骤 2-3，直接进入任务。
+如果正常返回作业列表，跳过步骤 2-3，直接进入任务。如果命令失败，先读取原始错误；只有错误明确表明凭证缺失或账号密码无效时才执行步骤 2。网络、TLS、服务器或非 TTY 错误都不能标记为 `NOT_LOGGED_IN`。即使 `ct`、`cc` 或 `grades` 随后要求手机令牌 OTP，也不代表账号密码失效。
 
-如果返回 `NOT_LOGGED_IN`（凭证不存在或密码错误），执行步骤 2：
+如果错误明确表明凭证不存在或账号密码无效，执行步骤 2：
 
 ```bash
-# 2. 在当前 Kimi Code 终端里交互式登录
+# 2. 在当前运行环境的 PTY/交互终端里登录
 pku3b init
 ```
 
@@ -193,24 +206,36 @@ pku3b init
 pku3b a ls
 ```
 
-**踩坑**: 直接管道输入会报错 "input device is not a TTY"。在 AutoPku 里不要生成 expect 脚本或明文密码文件，直接让用户在当前嵌入式 Kimi Code 终端回答 `pku3b init` 的交互提示。
+**交互认证边界**：
+- `pku3b init`、`pku3b ct`、`pku3b cc` 和 `pku3b grades` 都可能需要交互式输入
+- `The input device is not a TTY` 表示当前命令缺少交互终端，不等于登录失效；改用 PTY/交互终端重跑原命令，不要因此重新初始化凭证
+- 手机令牌 OTP、密码和验证码必须由用户直接在交互终端输入；不要放进命令参数、聊天、日志、expect 脚本或明文文件
+- 用户暂时无法完成 OTP 时，保留已经成功取得的作业/公告结果，将课表、课件或成绩标记为“认证待完成”，不得声称完整同步
 
 ### 常用命令
 
 ```bash
 # 作业
-pku3b a ls --all-term                   # 所有学期作业（带ANSI颜色码）
+pku3b a -f ls                           # 强制刷新当前学期未完成作业
+pku3b a -f ls -a                        # 强制刷新当前学期全部作业（含已完成）
+pku3b a ls --all-term                   # 所有学期作业（含已完成，带 ANSI 颜色码）
 pku3b a download <ID> -d <dir>          # 下载附件
 pku3b a submit <ID> <file>              # 提交作业
 
-# 公告 (v0.11.0+)
-pku3b ann ls                            # 列出公告
+# 公告
+pku3b ann -f ls                         # 强制刷新当前学期公告
 pku3b ann show <ID>                     # 查看公告详情
 
-# 课表 (v0.11.0+)
-pku3b ct -r                             # 获取课表 JSON
+# 课程内容/课件 (v0.14.0+，可能要求 OTP)
+pku3b cc -f ls                          # 列出当前学期课程内容
+pku3b cc down <COURSE_ID:CONTENT_ID> -o <dir> --course-title "<course>"
+# 如需另存条目描述，再追加：--output-desc <file>
 
-# 选课
+# 课表与成绩（可能要求 OTP）
+pku3b ct -f -r                          # 获取当前课表原始 JSON
+pku3b grades -f                         # 查看当前学期成绩；仅在用户明确要求时读取
+
+# 选课（可选核对）
 pku3b s -d major show                   # 主修课程（可能返回302，作为可选）
 ```
 
@@ -218,7 +243,7 @@ pku3b s -d major show                   # 主修课程（可能返回302，作�
 
 | Task | 文件 | 说明 |
 |------|------|------|
-| 同步通知 | `tasks/sync-notices.md` | 获取作业/公告，生成摘要，并行处理课程 |
+| 同步通知 | `tasks/sync-notices.md` | 获取课件/作业/公告，生成摘要，并行处理课程 |
 | 完成作业 | `tasks/do-homework.md` | 解析PDF→解答→渲染→询问用户→提交 |
 | 撰写笔记 | `tasks/write-notes.md` | 从课件提取数学核心，去除噪声 |
 | 撰写论文 | `tasks/write-paper.md` | 从大纲到正文到编译，支持LaTeX/Word双模式 |
@@ -265,9 +290,11 @@ pku3b s -d major show                   # 主修课程（可能返回302，作�
 
 ### 3. 数据格式问题
 
-- **无 `--json` 参数**: pku3b 输出纯文本带ANSI颜色码，需正则解析
-- **`pku3b a ls -a` 不完整**: 只显示有作业的课程，需用 `pku3b s show` 补全
+- **列表命令无 `--json` 参数**: `a`、`ann`、`cc` 输出纯文本并可能带 ANSI 颜色码，需先清理再解析
+- **`pku3b a ls -a` 不完整**: 只显示有作业的课程，可用 `pku3b s -d major show` 做可选核对
 - **`--all-term` 返回所有历史学期**: 需筛选当前学期
+- **课程内容 ID 是复合 ID**: `pku3b cc ls` 每行末尾的 `course_id:content_id` 必须整体传给 `pku3b cc down`
+- **OTP 与登录失败不同**: 非 TTY/OTP 提示应在交互终端继续原命令，不能据此运行 `pku3b init`
 
 ### 4. 用户确认（重要）
 
